@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>多维文献全景图谱 - 逻辑修正版</title>
+    <title>学术文献全景关联图谱 - 算法 3.0</title>
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
     <style>
         body { margin: 0; padding: 0; background-color: #0f172a; font-family: sans-serif; color: #fff; overflow: hidden;}
@@ -15,7 +15,7 @@
 <body>
     <div class="header">
         <h2 id="status-text">正在加载学术星系...</h2>
-        <p id="sub-text">实线箭头：引用继承 | 单条虚线：核心语义相关 | 节点大小：引用影响力</p>
+        <p id="sub-text">实线箭头：引用继承 | 粗实线：文献耦合 | 虚线：特征相关</p>
     </div>
     <div id="chart-container"></div>
 
@@ -27,12 +27,10 @@
             return str ? str.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
         }
 
-        // 提取关键词组
-        function getSemanticGrams(str) {
+        // 提取核心特征（排除 4 字母以下的虚词）
+        function getCoreFeatures(str) {
             let words = str.toLowerCase().split(/[^a-z]/).filter(w => w.length > 4);
-            let grams = new Set(words); 
-            for(let i=0; i<words.length-1; i++) grams.add(words[i] + " " + words[i+1]);
-            return grams;
+            return new Set(words);
         }
 
         if (binId) {
@@ -61,48 +59,50 @@
                         venue: venueInfo,
                         rawTitle: p.title,
                         normTitle: normalize(p.title),
-                        // 引用列表
                         refs: (p.ref_norm_titles || []).map(r => normalize(r)),
-                        grams: getSemanticGrams(p.title)
+                        features: getCoreFeatures(p.title)
                     });
                     nodeNames.add(shortTitle);
                 }
             });
 
+            // --- 核心算法 3.0 ---
             for (let i = 0; i < nodes.length; i++) {
                 for (let j = 0; j < nodes.length; j++) {
                     if (i === j) continue;
                     let a = nodes[i], b = nodes[j];
                     
-                    // --- 1. 模糊匹配引用关系 (解决 A 引用 B) ---
-                    // 如果 A 的引文列表里有任何一项 包含了 B 的标题关键词，就认为是引用
-                    let isCited = a.refs.some(r => r.length > 10 && (r.includes(b.normTitle) || b.normTitle.includes(r)));
-                    
-                    if (isCited) {
+                    // 1. 显式引用 (A 引用 B) -> 实线箭头
+                    let isACiteB = a.refs.some(r => r.length > 10 && (r.includes(b.normTitle) || b.normTitle.includes(r)));
+                    if (isACiteB) {
                         links.push({
                             source: a.name, target: b.name,
-                            symbol: ['none', 'arrow'],
-                            symbolSize: [0, 10],
+                            symbol: ['none', 'arrow'], symbolSize: [0, 8],
                             lineStyle: { type: 'solid', width: 2.5, color: '#38bdf8', opacity: 0.8 }
                         });
-                    } 
-                    // --- 2. 语义相关性逻辑 (仅计算一次，且排查双向引用) ---
-                    else if (i < j) {
-                        // 确认反向也没有引用关系，才考虑画虚线
-                        let isReverseCited = b.refs.some(r => r.length > 10 && (r.includes(a.normTitle) || a.normTitle.includes(r)));
+                        continue; 
+                    }
+
+                    // 2. 文献耦合 (A 和 B 引用了相同的文献) -> 粗实线 (无箭头)
+                    if (i < j) {
+                        let commonRefs = a.refs.filter(ref => b.refs.includes(ref));
+                        if (commonRefs.length >= 2) {
+                            links.push({
+                                source: a.name, target: b.name,
+                                lineStyle: { type: 'solid', width: 3.5, color: '#6366f1', opacity: 0.5 }
+                            });
+                            continue;
+                        }
+
+                        // 3. 语义特征相似度 -> 单虚线
+                        let intersect = new Set([...a.features].filter(x => b.features.has(x)));
+                        let similarity = intersect.size / Math.max(a.features.size, b.features.size);
                         
-                        if (!isReverseCited) {
-                            let intersect = new Set([...a.grams].filter(x => b.grams.has(x)));
-                            let jaccard = intersect.size / (a.grams.size + b.grams.size - intersect.size);
-                            
-                            // 门槛从 0.18 提升到 0.28，过滤掉无效的弱相关
-                            if (jaccard > 0.28) {
-                                links.push({
-                                    source: a.name, target: b.name,
-                                    symbol: ['none', 'none'],
-                                    lineStyle: { type: 'dashed', width: 1.2, color: '#94a3b8', opacity: 0.3 }
-                                });
-                            }
+                        if (similarity > 0.3) {
+                            links.push({
+                                source: a.name, target: b.name,
+                                lineStyle: { type: 'dashed', width: 1, color: '#94a3b8', opacity: 0.3 }
+                            });
                         }
                     }
                 }
@@ -111,27 +111,14 @@
             var chart = echarts.init(document.getElementById('chart-container'));
             chart.setOption({
                 tooltip: { 
-                    backgroundColor: 'rgba(15, 23, 42, 0.95)',
-                    borderColor: '#38bdf8',
-                    textStyle: { color: '#fff' },
-                    formatter: function(p) {
-                        if (p.dataType === 'node') {
-                            return `<div style="max-width:320px; white-space:normal; word-break:break-all;">
-                                        <b style="color:#38bdf8; font-size:14px;">${p.data.rawTitle}</b><br/>
-                                        <hr style="border:0; border-top:1px solid #334155; margin:8px 0;">
-                                        <b>发表期刊:</b> ${p.data.venue}<br/>
-                                        <b>发表年份:</b> ${p.data.year}<br/>
-                                        <b>全球被引:</b> ${p.data.value} 次
-                                    </div>`;
-                        }
-                        return `关联路径: ${p.data.source} > ${p.data.target}`;
-                    }
+                    backgroundColor: 'rgba(15, 23, 42, 0.95)', borderColor: '#38bdf8', textStyle: { color: '#fff' },
+                    formatter: (p) => p.dataType === 'node' ? 
+                        `<div style="max-width:300px;white-space:normal;"><b>${p.data.rawTitle}</b><hr style="border:0;border-top:1px solid #334155;margin:5px 0;">期刊: ${p.data.venue}<br/>年份: ${p.data.year}<br/>被引: ${p.data.value}次</div>` : p.name
                 },
                 series: [{
-                    type: 'graph', layout: 'force', roam: true, draggable: true,
-                    autoCurveness: true,
+                    type: 'graph', layout: 'force', roam: true, draggable: true, autoCurveness: true,
                     symbolSize: (val) => Math.max(15, Math.min(val / 6 + 12, 60)),
-                    itemStyle: { color: '#38bdf8', borderColor: '#fff', borderWidth: 1, shadowBlur: 15, shadowColor: '#38bdf8' },
+                    itemStyle: { color: '#38bdf8', borderColor: '#fff', borderWidth: 1, shadowBlur: 10, shadowColor: '#38bdf8' },
                     label: { show: true, position: 'right', fontSize: 10, color: '#e2e8f0' },
                     force: { repulsion: 1000, edgeLength: 200, gravity: 0.1 },
                     data: nodes, links: links

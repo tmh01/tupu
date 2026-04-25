@@ -15,83 +15,103 @@
 <body>
     <div class="header">
         <h2 id="status-text">正在加载图谱数据...</h2>
-        <p id="sub-text">请稍候，正在构建底层拓扑结构</p>
+        <p id="sub-text">正在构建底层拓扑结构并计算节点权重</p>
     </div>
     <div id="chart-container"></div>
 
     <script>
-        // 1. 从网址中获取 ID 
         var urlParams = new URLSearchParams(window.location.search);
         var binId = urlParams.get('id');
         var statusEl = document.getElementById('status-text');
         var subTextEl = document.getElementById('sub-text');
 
+        // 标题归一化：去除所有空格和特殊字符，统一小写，用于精准匹配引用
+        function normalizeTitle(str) {
+            return str ? str.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
+        }
+
         if (!binId) {
             statusEl.innerText = '错误：未提供图谱 ID';
-            subTextEl.innerText = '请从 AI 助手生成的专属链接进入本页面';
         } else {
-            // 2. 调用 JSONBin API 获取数据
             fetch(`https://api.jsonbin.io/v3/b/${binId}`, {
-                // 【已修复】这里使用了正确的 X-Access-Key 请求头
                 headers: { 'X-Access-Key': '$2a$10$R0V/CvN8JQs5HQK.9QakeeA6Odkw.nwpMzIyyUQ.cNJH34Lk.SW0q' }
             })
             .then(res => res.json())
             .then(data => {
                 statusEl.innerText = '学术文献全景关联图谱';
-                subTextEl.innerText = '揭示检索、推荐与引文脉络的底层拓扑结构 | 节点越大代表核心枢纽 | 支持拖拽缩放';
+                subTextEl.innerText = '节点大小映射被引权重 | 实线代表引用关系 | 虚线代表语义相关';
                 renderGraph(data.record); 
             })
             .catch(err => {
                 statusEl.innerText = '数据加载失败';
-                subTextEl.innerText = '无法获取图谱数据，可能是 ID 错误或网络异常';
             });
         }
 
-        // 3. 渲染 ECharts 图谱
         function renderGraph(papers) {
             let nodes = [];
             let links = [];
             let nodeNames = new Set();
             
-            // 构造节点
+            // 1. 构造节点：保留 size 逻辑 (value 映射到 citationCount)
             papers.forEach(p => {
                 let title = p.title || "";
                 let name = title.length > 40 ? title.substring(0, 40) + "..." : title;
                 if (!nodeNames.has(name)) {
                     nodes.push({
                         name: name, 
+                        // 核心：这里的 value 决定了节点大小，保留你要求的引用数关系
                         value: p.citationCount || 0, 
                         year: p.year || '未知', 
-                        rawTitle: title
+                        rawTitle: title,
+                        normTitle: normalizeTitle(title),
+                        // 提取 4 个字母以上的单词作为语义关键词
+                        keywords: title.toLowerCase().split(/[^a-z]/).filter(w => w.length > 4)
                     });
                     nodeNames.add(name);
                 }
             });
 
-            // 构造连线
-            papers.forEach(p => {
-                let title = p.title || "";
-                let source = title.length > 40 ? title.substring(0, 40) + "..." : title;
-                let refs = p.ref_norm_titles || [];
-                
-                refs.forEach(ref => {
-                    nodes.forEach(target => {
-                        if (target.rawTitle.toLowerCase().includes(ref.toLowerCase())) {
-                            links.push({source: source, target: target.name});
-                        }
-                    });
-                });
-            });
+            // 2. 构造连线：双重关联算法
+            for (let i = 0; i < nodes.length; i++) {
+                let nodeA = nodes[i];
+                // 找到该节点在原始数据中的引用列表
+                let paperA_origin = papers.find(p => p.title === nodeA.rawTitle) || {};
+                let refsA = (paperA_origin.ref_norm_titles || []).map(r => normalizeTitle(r));
 
-            // 初始化 ECharts
+                for (let j = 0; j < nodes.length; j++) {
+                    if (i === j) continue;
+                    let nodeB = nodes[j];
+
+                    // 关系类型一：存在直接引用 (实线)
+                    if (refsA.includes(nodeB.normTitle) || (nodeB.normTitle.length > 10 && nodeA.normTitle.includes(nodeB.normTitle))) {
+                        links.push({
+                            source: nodeA.name, 
+                            target: nodeB.name, 
+                            lineStyle: { type: 'solid', width: 2, color: '#38bdf8', opacity: 0.6 }
+                        });
+                    } 
+                    // 关系类型二：没有引用，但标题关键词高度重合 (虚线)
+                    else {
+                        let commonWords = nodeA.keywords.filter(w => nodeB.keywords.includes(w));
+                        if (commonWords.length >= 3) { // 3个长单词重合视为高度相关
+                            links.push({
+                                source: nodeA.name, 
+                                target: nodeB.name, 
+                                lineStyle: { type: 'dashed', width: 1, color: '#94a3b8', opacity: 0.3 }
+                            });
+                        }
+                    }
+                }
+            }
+
             var chart = echarts.init(document.getElementById('chart-container'));
-            var option = {
+            chart.setOption({
                 tooltip: {
                     formatter: function (params) {
                         if (params.dataType === 'node') {
-                            return '<b>' + params.data.name + '</b><br/>年份: ' + params.data.year + '<br/>被引: ' + params.data.value + '次';
+                            return '<b>' + params.data.rawTitle + '</b><br/>发表年份: ' + params.data.year + '<br/>全球被引: ' + params.data.value + '次';
                         }
-                        return params.data.source + ' > ' + params.data.target;
+                        return params.data.source + ' 与 ' + params.data.target + ' 存在关联';
                     }
                 },
                 series: [{
@@ -99,18 +119,36 @@
                     layout: 'force',
                     roam: true,
                     draggable: true,
-                    symbolSize: function (val) { return Math.max(15, Math.min(val * 2, 60)); },
-                    itemStyle: { color: '#38bdf8', borderColor: '#fff', borderWidth: 1, shadowBlur: 10, shadowColor: '#38bdf8' },
-                    label: { show: true, position: 'right', formatter: '{b}', fontSize: 12, color: '#e2e8f0' },
-                    force: { repulsion: 500, edgeLength: 120, gravity: 0.1 },
+                    // 这里的逻辑确保了：value（引用数）越大，节点圆圈就越大
+                    symbolSize: function (val) { 
+                        // 基础大小 15，根据引用数线性增长，最大 60
+                        return Math.max(15, Math.min(val * 1.5, 60)); 
+                    },
+                    itemStyle: { 
+                        color: '#38bdf8', 
+                        borderColor: '#fff', 
+                        borderWidth: 1, 
+                        shadowBlur: 10, 
+                        shadowColor: '#38bdf8' 
+                    },
+                    label: { 
+                        show: true, 
+                        position: 'right', 
+                        formatter: '{b}', 
+                        fontSize: 11, 
+                        color: '#e2e8f0' 
+                    },
+                    force: { 
+                        repulsion: 600,  // 节点间的斥力，防止重叠
+                        edgeLength: 150, // 连线的理想长度
+                        gravity: 0.05    // 中心引力
+                    },
                     edgeSymbol: ['none', 'arrow'],
                     edgeSymbolSize: [0, 8],
-                    lineStyle: { color: '#475569', curveness: 0.2, width: 1.5 },
                     data: nodes,
                     links: links
                 }]
-            };
-            chart.setOption(option);
+            });
         }
     </script>
 </body>

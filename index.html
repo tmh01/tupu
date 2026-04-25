@@ -2,150 +2,132 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>多维文献全景图谱 - 可视化</title>
+    <title>多维文献全景图谱 - 最终校对版</title>
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
     <style>
-        body { margin: 0; padding: 0; background-color: #0f172a; font-family: sans-serif; color: #fff;}
+        body { margin: 0; padding: 0; background-color: #0f172a; font-family: sans-serif; color: #fff; overflow: hidden;}
         #chart-container { width: 100vw; height: 100vh; }
-        .header { position: absolute; top: 20px; left: 20px; z-index: 10; background: rgba(30,41,59,0.9); padding: 15px; border-radius: 8px; border: 1px solid #334155; }
+        .header { position: absolute; top: 20px; left: 20px; z-index: 10; background: rgba(30,41,59,0.9); padding: 15px; border-radius: 8px; border: 1px solid #334155; pointer-events: none;}
         .header h2 { margin: 0 0 5px 0; font-size: 18px; color: #38bdf8; }
         .header p { margin: 0; font-size: 12px; color: #94a3b8; }
     </style>
 </head>
 <body>
     <div class="header">
-        <h2 id="status-text">正在加载图谱数据...</h2>
-        <p id="sub-text">正在构建底层拓扑结构并计算节点权重</p>
+        <h2 id="status-text">正在加载学术星系...</h2>
+        <p id="sub-text">实线箭头：引用关系 | 虚线：语义关联 | 节点：引用影响力</p>
     </div>
     <div id="chart-container"></div>
 
     <script>
         var urlParams = new URLSearchParams(window.location.search);
         var binId = urlParams.get('id');
-        var statusEl = document.getElementById('status-text');
-        var subTextEl = document.getElementById('sub-text');
-
-        // 标题归一化：去除所有空格和特殊字符，统一小写，用于精准匹配引用
-        function normalizeTitle(str) {
+        
+        function normalize(str) {
             return str ? str.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
         }
 
-        if (!binId) {
-            statusEl.innerText = '错误：未提供图谱 ID';
-        } else {
+        function getSemanticGrams(str) {
+            let words = str.toLowerCase().split(/[^a-z]/).filter(w => w.length > 4);
+            let grams = new Set(words); 
+            for(let i=0; i<words.length-1; i++) grams.add(words[i] + " " + words[i+1]);
+            return grams;
+        }
+
+        if (binId) {
             fetch(`https://api.jsonbin.io/v3/b/${binId}`, {
                 headers: { 'X-Access-Key': '$2a$10$R0V/CvN8JQs5HQK.9QakeeA6Odkw.nwpMzIyyUQ.cNJH34Lk.SW0q' }
             })
             .then(res => res.json())
             .then(data => {
-                statusEl.innerText = '学术文献全景关联图谱';
-                subTextEl.innerText = '节点大小映射被引权重 | 实线代表引用关系 | 虚线代表语义相关';
+                document.getElementById('status-text').innerText = '学术文献全景关联图谱';
                 renderGraph(data.record); 
             })
-            .catch(err => {
-                statusEl.innerText = '数据加载失败';
-            });
+            .catch(err => { document.getElementById('status-text').innerText = '数据加载失败'; });
         }
 
         function renderGraph(papers) {
-            let nodes = [];
-            let links = [];
-            let nodeNames = new Set();
+            let nodes = [], links = [], nodeNames = new Set();
             
-            // 1. 构造节点：保留 size 逻辑 (value 映射到 citationCount)
             papers.forEach(p => {
-                let title = p.title || "";
-                let name = title.length > 40 ? title.substring(0, 40) + "..." : title;
-                if (!nodeNames.has(name)) {
+                let shortTitle = p.title.length > 40 ? p.title.substring(0, 40) + "..." : p.title;
+                if (!nodeNames.has(shortTitle)) {
+                    let venueInfo = p.venue || (p.venues_list && p.venues_list.length > 0 ? p.venues_list[0] : '未知期刊/会议');
                     nodes.push({
-                        name: name, 
-                        // 核心：这里的 value 决定了节点大小，保留你要求的引用数关系
+                        name: shortTitle, 
                         value: p.citationCount || 0, 
-                        year: p.year || '未知', 
-                        rawTitle: title,
-                        normTitle: normalizeTitle(title),
-                        // 提取 4 个字母以上的单词作为语义关键词
-                        keywords: title.toLowerCase().split(/[^a-z]/).filter(w => w.length > 4)
+                        year: p.year || '未知',
+                        venue: venueInfo,
+                        rawTitle: p.title,
+                        normTitle: normalize(p.title),
+                        refs: (p.ref_norm_titles || []).map(r => normalize(r)),
+                        grams: getSemanticGrams(p.title)
                     });
-                    nodeNames.add(name);
+                    nodeNames.add(shortTitle);
                 }
             });
 
-            // 2. 构造连线：双重关联算法
             for (let i = 0; i < nodes.length; i++) {
-                let nodeA = nodes[i];
-                // 找到该节点在原始数据中的引用列表
-                let paperA_origin = papers.find(p => p.title === nodeA.rawTitle) || {};
-                let refsA = (paperA_origin.ref_norm_titles || []).map(r => normalizeTitle(r));
-
                 for (let j = 0; j < nodes.length; j++) {
                     if (i === j) continue;
-                    let nodeB = nodes[j];
-
-                    // 关系类型一：存在直接引用 (实线)
-                    if (refsA.includes(nodeB.normTitle) || (nodeB.normTitle.length > 10 && nodeA.normTitle.includes(nodeB.normTitle))) {
+                    let a = nodes[i], b = nodes[j];
+                    
+                    if (a.refs.includes(b.normTitle)) {
                         links.push({
-                            source: nodeA.name, 
-                            target: nodeB.name, 
-                            lineStyle: { type: 'solid', width: 2, color: '#38bdf8', opacity: 0.6 }
+                            source: a.name, target: b.name,
+                            symbol: ['none', 'arrow'],
+                            symbolSize: [0, 10],
+                            lineStyle: { type: 'solid', width: 2.5, color: '#38bdf8', opacity: 0.7 }
                         });
-                    } 
-                    // 关系类型二：没有引用，但标题关键词高度重合 (虚线)
-                    else {
-                        let commonWords = nodeA.keywords.filter(w => nodeB.keywords.includes(w));
-                        if (commonWords.length >= 3) { // 3个长单词重合视为高度相关
-                            links.push({
-                                source: nodeA.name, 
-                                target: nodeB.name, 
-                                lineStyle: { type: 'dashed', width: 1, color: '#94a3b8', opacity: 0.3 }
-                            });
-                        }
+                        continue;
+                    }
+
+                    let intersect = new Set([...a.grams].filter(x => b.grams.has(x)));
+                    let jaccard = intersect.size / (a.grams.size + b.grams.size - intersect.size);
+                    
+                    if (jaccard > 0.18) {
+                        links.push({
+                            source: a.name, target: b.name,
+                            symbol: ['none', 'none'],
+                            lineStyle: { type: 'dashed', width: 1.2, color: '#94a3b8', opacity: 0.4 }
+                        });
                     }
                 }
             }
 
             var chart = echarts.init(document.getElementById('chart-container'));
             chart.setOption({
-                tooltip: {
-                    formatter: function (params) {
-                        if (params.dataType === 'node') {
-                            return '<b>' + params.data.rawTitle + '</b><br/>发表年份: ' + params.data.year + '<br/>全球被引: ' + params.data.value + '次';
+                tooltip: { 
+                    backgroundColor: 'rgba(15, 23, 42, 0.95)',
+                    borderColor: '#38bdf8',
+                    textStyle: { color: '#fff' },
+                    formatter: function(p) {
+                        if (p.dataType === 'node') {
+                            return `<div style="max-width:320px; white-space:normal; word-break:break-all;">
+                                        <b style="color:#38bdf8; font-size:14px;">${p.data.rawTitle}</b><br/>
+                                        <hr style="border:0; border-top:1px solid #334155; margin:8px 0;">
+                                        <b>发表期刊:</b> ${p.data.venue}<br/>
+                                        <b>发表年份:</b> ${p.data.year}<br/>
+                                        <b>全球被引:</b> ${p.data.value} 次
+                                    </div>`;
                         }
-                        return params.data.source + ' 与 ' + params.data.target + ' 存在关联';
+                        return `关联路径: ${p.data.source} > ${p.data.target}`;
                     }
                 },
                 series: [{
-                    type: 'graph',
-                    layout: 'force',
-                    roam: true,
+                    type: 'graph', 
+                    layout: 'force', 
+                    roam: true, 
                     draggable: true,
-                    // 这里的逻辑确保了：value（引用数）越大，节点圆圈就越大
-                    symbolSize: function (val) { 
-                        // 基础大小 15，根据引用数线性增长，最大 60
-                        return Math.max(15, Math.min(val * 1.5, 60)); 
-                    },
-                    itemStyle: { 
-                        color: '#38bdf8', 
-                        borderColor: '#fff', 
-                        borderWidth: 1, 
-                        shadowBlur: 10, 
-                        shadowColor: '#38bdf8' 
-                    },
-                    label: { 
-                        show: true, 
-                        position: 'right', 
-                        formatter: '{b}', 
-                        fontSize: 11, 
-                        color: '#e2e8f0' 
-                    },
-                    force: { 
-                        repulsion: 600,  // 节点间的斥力，防止重叠
-                        edgeLength: 150, // 连线的理想长度
-                        gravity: 0.05    // 中心引力
-                    },
-                    edgeSymbol: ['none', 'arrow'],
-                    edgeSymbolSize: [0, 8],
-                    data: nodes,
+                    // --- 关键参数位置 ---
+                    autoCurveness: true, // 自动处理双向引用线条重合的问题
+                    edgeSymbol: ['none', 'arrow'], // 默认不显示箭头，在 links 逻辑中单独开启
+                    // ------------------
+                    symbolSize: (val) => Math.max(15, Math.min(val / 8 + 12, 60)),
+                    itemStyle: { color: '#38bdf8', borderColor: '#fff', borderWidth: 1, shadowBlur: 15, shadowColor: '#38bdf8' },
+                    label: { show: true, position: 'right', fontSize: 10, color: '#e2e8f0' },
+                    force: { repulsion: 800, edgeLength: 180, gravity: 0.1 },
+                    data: nodes, 
                     links: links
                 }]
             });

@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>多维文献全景图谱 - 可视化</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <style>
+        body { margin: 0; padding: 0; background-color: #0f172a; font-family: sans-serif; color: #fff;}
+        #chart-container { width: 100vw; height: 100vh; }
+        .header { position: absolute; top: 20px; left: 20px; z-index: 10; background: rgba(30,41,59,0.9); padding: 15px; border-radius: 8px; border: 1px solid #334155; }
+        .header h2 { margin: 0 0 5px 0; font-size: 18px; color: #38bdf8; }
+        .header p { margin: 0; font-size: 12px; color: #94a3b8; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h2 id="status-text">正在加载图谱数据...</h2>
+        <p id="sub-text">请稍候，正在构建底层拓扑结构</p>
+    </div>
+    <div id="chart-container"></div>
+
+    <script>
+        // 1. 从网址中获取 ID 
+        var urlParams = new URLSearchParams(window.location.search);
+        var binId = urlParams.get('id');
+        var statusEl = document.getElementById('status-text');
+        var subTextEl = document.getElementById('sub-text');
+
+        if (!binId) {
+            statusEl.innerText = '错误：未提供图谱 ID';
+            subTextEl.innerText = '请从 AI 助手生成的专属链接进入本页面';
+        } else {
+            // 2. 调用 JSONBin API 获取数据
+            fetch(`https://api.jsonbin.io/v3/b/${binId}`, {
+                // 【已修复】这里使用了正确的 X-Access-Key 请求头
+                headers: { 'X-Access-Key': '$2a$10$R0V/CvN8JQs5HQK.9QakeeA6Odkw.nwpMzIyyUQ.cNJH34Lk.SW0q' }
+            })
+            .then(res => res.json())
+            .then(data => {
+                statusEl.innerText = '学术文献全景关联图谱';
+                subTextEl.innerText = '揭示检索、推荐与引文脉络的底层拓扑结构 | 节点越大代表核心枢纽 | 支持拖拽缩放';
+                renderGraph(data.record); 
+            })
+            .catch(err => {
+                statusEl.innerText = '数据加载失败';
+                subTextEl.innerText = '无法获取图谱数据，可能是 ID 错误或网络异常';
+            });
+        }
+
+        // 3. 渲染 ECharts 图谱
+        function renderGraph(papers) {
+            let nodes = [];
+            let links = [];
+            let nodeNames = new Set();
+            
+            // 构造节点
+            papers.forEach(p => {
+                let title = p.title || "";
+                let name = title.length > 40 ? title.substring(0, 40) + "..." : title;
+                if (!nodeNames.has(name)) {
+                    nodes.push({
+                        name: name, 
+                        value: p.citationCount || 0, 
+                        year: p.year || '未知', 
+                        rawTitle: title
+                    });
+                    nodeNames.add(name);
+                }
+            });
+
+            // 构造连线
+            papers.forEach(p => {
+                let title = p.title || "";
+                let source = title.length > 40 ? title.substring(0, 40) + "..." : title;
+                let refs = p.ref_norm_titles || [];
+                
+                refs.forEach(ref => {
+                    nodes.forEach(target => {
+                        if (target.rawTitle.toLowerCase().includes(ref.toLowerCase())) {
+                            links.push({source: source, target: target.name});
+                        }
+                    });
+                });
+            });
+
+            // 初始化 ECharts
+            var chart = echarts.init(document.getElementById('chart-container'));
+            var option = {
+                tooltip: {
+                    formatter: function (params) {
+                        if (params.dataType === 'node') {
+                            return '<b>' + params.data.name + '</b><br/>年份: ' + params.data.year + '<br/>被引: ' + params.data.value + '次';
+                        }
+                        return params.data.source + ' > ' + params.data.target;
+                    }
+                },
+                series: [{
+                    type: 'graph',
+                    layout: 'force',
+                    roam: true,
+                    draggable: true,
+                    symbolSize: function (val) { return Math.max(15, Math.min(val * 2, 60)); },
+                    itemStyle: { color: '#38bdf8', borderColor: '#fff', borderWidth: 1, shadowBlur: 10, shadowColor: '#38bdf8' },
+                    label: { show: true, position: 'right', formatter: '{b}', fontSize: 12, color: '#e2e8f0' },
+                    force: { repulsion: 500, edgeLength: 120, gravity: 0.1 },
+                    edgeSymbol: ['none', 'arrow'],
+                    edgeSymbolSize: [0, 8],
+                    lineStyle: { color: '#475569', curveness: 0.2, width: 1.5 },
+                    data: nodes,
+                    links: links
+                }]
+            };
+            chart.setOption(option);
+        }
+    </script>
+</body>
+</html>

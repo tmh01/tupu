@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>多维文献全景图谱 - 最终校对版</title>
+    <title>多维文献全景图谱 - 精简版</title>
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
     <style>
         body { margin: 0; padding: 0; background-color: #0f172a; font-family: sans-serif; color: #fff; overflow: hidden;}
@@ -15,7 +15,7 @@
 <body>
     <div class="header">
         <h2 id="status-text">正在加载学术星系...</h2>
-        <p id="sub-text">实线箭头：引用关系 | 虚线：语义关联 | 节点：引用影响力</p>
+        <p id="sub-text">实线箭头：引用关系 | 单条虚线：语义关联 | 节点：引用影响力</p>
     </div>
     <div id="chart-container"></div>
 
@@ -67,11 +67,13 @@
                 }
             });
 
+            // 核心关联算法优化
             for (let i = 0; i < nodes.length; i++) {
                 for (let j = 0; j < nodes.length; j++) {
                     if (i === j) continue;
                     let a = nodes[i], b = nodes[j];
                     
+                    // 1. 检查引用关系 (实线箭头) - 保持双向检测
                     if (a.refs.includes(b.normTitle)) {
                         links.push({
                             source: a.name, target: b.name,
@@ -79,18 +81,19 @@
                             symbolSize: [0, 10],
                             lineStyle: { type: 'solid', width: 2.5, color: '#38bdf8', opacity: 0.7 }
                         });
-                        continue;
-                    }
-
-                    let intersect = new Set([...a.grams].filter(x => b.grams.has(x)));
-                    let jaccard = intersect.size / (a.grams.size + b.grams.size - intersect.size);
-                    
-                    if (jaccard > 0.18) {
-                        links.push({
-                            source: a.name, target: b.name,
-                            symbol: ['none', 'none'],
-                            lineStyle: { type: 'dashed', width: 1.2, color: '#94a3b8', opacity: 0.4 }
-                        });
+                    } 
+                    // 2. 检查语义相关 (单条虚线) - 仅在 i < j 时计算一次，且确保没有引用关系
+                    else if (i < j && !b.refs.includes(a.normTitle)) {
+                        let intersect = new Set([...a.grams].filter(x => b.grams.has(x)));
+                        let jaccard = intersect.size / (a.grams.size + b.grams.size - intersect.size);
+                        
+                        if (jaccard > 0.18) {
+                            links.push({
+                                source: a.name, target: b.name,
+                                symbol: ['none', 'none'],
+                                lineStyle: { type: 'dashed', width: 1.2, color: '#94a3b8', opacity: 0.4 }
+                            });
+                        }
                     }
                 }
             }
@@ -119,10 +122,7 @@
                     layout: 'force', 
                     roam: true, 
                     draggable: true,
-                    // --- 关键参数位置 ---
-                    autoCurveness: true, // 自动处理双向引用线条重合的问题
-                    edgeSymbol: ['none', 'arrow'], // 默认不显示箭头，在 links 逻辑中单独开启
-                    // ------------------
+                    autoCurveness: true,
                     symbolSize: (val) => Math.max(15, Math.min(val / 8 + 12, 60)),
                     itemStyle: { color: '#38bdf8', borderColor: '#fff', borderWidth: 1, shadowBlur: 15, shadowColor: '#38bdf8' },
                     label: { show: true, position: 'right', fontSize: 10, color: '#e2e8f0' },
